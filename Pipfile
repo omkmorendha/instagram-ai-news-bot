@@ -9,6 +9,7 @@ bs4 = "*"
 lxml = "*"
 python-dotenv = "*"
 openai = "*"
+instagrapi = "*"
 
 [dev-packages]
 

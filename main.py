@@ -3,7 +3,9 @@ from bs4 import BeautifulSoup
 import openai
 import os
 from dotenv import load_dotenv
-import ast
+from instagrapi import Client
+from PIL import Image
+from io import BytesIO
 
 load_dotenv()
 
@@ -42,7 +44,7 @@ def generate_gpt(title, content):
         )
         prompt = f"""
         Summarize the below news article into a catchy Instagram caption
-        within 2000 characters, also create a 30s script to accompany this caption.
+        within 2000 characters, also create a script (which only contains text) that would take a TTS model about 60-90s to read.
 
         Based on the following content:\n\n{content}
 
@@ -83,8 +85,9 @@ def generate_image(caption):
         )
 
         prompt = f"""
-        Create a eye-catching image for the following caption to an instagram post
-
+        Create a eye-catching image for the following caption to an instagram post.
+        Do not add any text to the image.
+        
         Caption:\n\n{caption}
         """
 
@@ -100,6 +103,38 @@ def generate_image(caption):
     except Exception as e:
         print(f"Error generating image: {e}")
         return None
+
+
+def download_image_as_jpg(image_url, folder='images/'):
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    
+    response = requests.get(image_url)
+    image = Image.open(BytesIO(response.content))
+    local_filename = os.path.join(folder, os.path.splitext(image_url.split('/')[-1])[0] + '.jpg')
+
+    image = image.convert('RGB')  # Ensure the image is in RGB mode
+    image.save(local_filename, 'JPEG')
+    return local_filename
+
+def upload_post(image_url, caption):
+    try:
+        image_path = download_image_as_jpg(image_url)
+
+        USERNAME = os.environ.get('USERNAME')
+        PASSWORD = os.environ.get('PASSWORD')
+        cl = Client()
+        cl.login(USERNAME, PASSWORD)
+
+        media = cl.photo_upload(path=image_path, caption=caption)
+        print(f"Post successfully added: {media}")
+
+        os.remove(image_path)
+    
+    except Exception as e:
+        print(f"Error uploading post on Instagram: {e}")
+        if os.path.exists(image_path):
+            os.remove(image_path)
 
 
 feeds = ['https://www.artificialintelligence-news.com/feed/']
@@ -118,3 +153,6 @@ for out in output:
             image_url = generate_image(caption)
             if image_url:
                 print("Image URL: ", image_url)
+                upload_post(image_url, caption)
+                break
+            
