@@ -10,6 +10,7 @@ lxml = "*"
 python-dotenv = "*"
 openai = "*"
 instagrapi = "*"
+psycopg2-binary = "*"
 
 [dev-packages]
 
