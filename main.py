@@ -7,11 +7,16 @@ from dotenv import load_dotenv
 from instagrapi import Client
 from PIL import Image
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 
 load_dotenv()
 
-feeds = ["https://www.artificialintelligence-news.com/feed/"]
+feeds = [
+    "https://www.artificialintelligence-news.com/feed/"
+]
+
+THRESHOLD_HOURS=24
 
 DATABASE = {
     "dbname": os.environ.get("DB_NAME"),
@@ -35,6 +40,24 @@ def connect_db():
     except Exception as e:
         print(f"Error connecting to the database: {e}")
         return None
+
+
+def drop_table():
+    """
+    Drop the 'posts' table from the database if it exists.
+    """
+    try:
+        conn = connect_db()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("DROP TABLE IF EXISTS posts;")
+            conn.commit()
+            print("posts table successfully dropped")
+    except Exception as e:
+        print(f"Error dropping posts table from the database: {e}")
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def create_table():
@@ -135,30 +158,38 @@ def post_exists(title):
     return exists
 
 
-def get_rss_data(feeds):
+def get_rss_data(feeds, threshold_hours=THRESHOLD_HOURS):
     """
     Fetch and parse RSS feed data from the given list of feed URLs.
 
     Args:
         feeds (list): List of RSS feed URLs.
+        threshold_hours (int): Maximum age of the data in hours.
 
     Returns:
         output (list): List of dictionaries containing parsed RSS feed data.
     """
         
     output = []
+    now = datetime.now(pytz.utc)
+    threshold = timedelta(hours=threshold_hours)
+
     for url in feeds:
         try:
             resp = requests.get(url)
             soup = BeautifulSoup(resp.text, "xml")
             for entry in soup.find_all("item"):
-                item = {
-                    "title": entry.find("title").text,
-                    "pubdate": e.text if (e := entry.find("pubDate")) else None,
-                    "content": entry.find("description").text,
-                    "link": entry.find("link").text,
-                }
-                output.append(item)
+                pubdate_str = entry.find("pubDate").text if entry.find("pubDate") else None
+                if pubdate_str:
+                    pubdate = datetime.strptime(pubdate_str, "%a, %d %b %Y %H:%M:%S %z")
+                    if now - pubdate <= threshold:
+                        item = {
+                            "title": entry.find("title").text,
+                            "pubdate": pubdate_str,
+                            "content": entry.find("description").text,
+                            "link": entry.find("link").text,
+                        }
+                        output.append(item)
         except Exception as e:
             print(f"Failed to scrape data for feed {url}, due to {e}")
 
@@ -301,6 +332,7 @@ def upload_post(image_url, caption):
 def main():
     output = get_rss_data(feeds)
 
+    # drop_table()
     create_table()
 
     for out in output:
@@ -317,9 +349,8 @@ def main():
                     image_url = generate_image(caption)
 
                     if image_url:
-                        upload_post(image_url, caption)
+                        # upload_post(image_url, caption)
                         save_post(feeds[0], title, caption, script, image_url)
-                        break
         else:
             print(f"Post already exists: {title}")
 
