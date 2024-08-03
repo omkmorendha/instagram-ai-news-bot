@@ -5,6 +5,8 @@ import openai
 import psycopg2
 from dotenv import load_dotenv
 from instagrapi import Client
+import base64
+import json
 from PIL import Image
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -78,6 +80,7 @@ def create_table():
                     caption TEXT,
                     script TEXT,
                     image_url TEXT,
+                    tweet TEXT,
                     datetime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (title)
                 )
@@ -101,7 +104,7 @@ def create_table():
         conn.close()
 
 
-def save_post(feed, title, caption, script, image_url):
+def save_post(feed, title, caption, script, image_url, tweet):
     """
     Save a post to the 'posts' table in the database.
 
@@ -119,11 +122,11 @@ def save_post(feed, title, caption, script, image_url):
         try:
             cursor.execute(
                 """
-                INSERT INTO posts (feed, title, caption, script, image_url, datetime)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO posts (feed, title, caption, script, image_url, tweet, datetime)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (title) DO NOTHING
                 """,
-                (feed, title[:30], caption, script, image_url, datetime.now()),
+                (feed, title[:30], caption, script, image_url, tweet, datetime.now()),
             )
             conn.commit()
 
@@ -213,34 +216,34 @@ def generate_gpt(title, content):
         openai_client = openai.OpenAI(
             api_key=os.environ.get("OPENAI_API_KEY"),
         )
-        prompt = f"""
-        Summarize the below news article into a catchy Instagram caption
-        within 2000 characters and atleast 500 characters, also create a script (which only contains text) that would take a TTS model about 60-90s to read.
+        system_prompt = f"""
+        1. Summarize the below news article into a catchy Instagram caption within 2000 characters and atleast 500 characters, 
+        2. Also create a script (which only contains text) that would take a TTS model about 60-90s to read.
+        3. Add a tweet for the same, using the relevant hashtag
 
-        Based on the following content:\n\n{content}
-
-        and 
-
-        Title:\n\n{title}
-
-        The answer should be in the format:
+        The answer should be in this JSON format:
         {{
-           'caption' : <caption here>,
-           'script' : <script here> 
+           "caption" : "<caption here>",
+           "script" : "<script here>",
+           "tweet" : "<tweet here>"
         }}
+        """
+
+        user_prompt = f"""
+        Based on the following content:\n\n{content} and Title:\n\n{title}
         """
 
         response = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
             ],
             temperature=1,
         )
 
         gpt_output = response.choices[0].message.content
-        gpt_output = eval(gpt_output)
+        gpt_output = json.loads(gpt_output)
         return gpt_output
     except Exception as e:
         print(f"Error generating caption: {e}")
@@ -305,15 +308,16 @@ def download_image_as_jpg(image_url, folder="images/"):
     return local_filename
 
 
-def upload_post(image_url, caption):
+def upload_post(image_url, caption, tweet):
     """
     Upload an Instagram post with the given image URL and caption.
 
     Args:
         image_url (str): The URL of the image to upload.
         caption (str): The caption for the Instagram post.
+        tweet (str): The tweet content to include.
     """
-        
+
     try:
         cookie = os.environ.get('INSTAGRAM_COOKIE')
         url = os.environ.get('INSTAGRAM_POST_URL')
@@ -322,17 +326,35 @@ def upload_post(image_url, caption):
             "Cookie": cookie,
         }
 
+        response = requests.get(image_url)
+        if response.status_code == 200:
+            image = Image.open(BytesIO(response.content))
+            buffered = BytesIO()
+            image.save(buffered, format="JPEG")
+            image_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        else:
+            print(f"Error downloading the image, response: {response.content}")
+            return
+
+        image_binary = base64.b64decode(image_base64)
+
         data = {
             "caption": caption,
-            "image_url": image_url
+            "tweet": tweet,
+            "image_url": image_url,
         }
 
-        response = requests.post(url, headers=headers, data=data)
+        files = {
+            "file": ("image.jpg", image_binary, "image/jpeg")
+        }
+
+        response = requests.post(url, headers=headers, data=data, files=files)
 
         if response.status_code == 200:
-            print("Posted succesfully to Instagram")
+            print("Posted successfully to Instagram")
         else:
-            print(f"Error uploading to instagram, response: {response.content}")
+            print(f"Error uploading to Instagram, response: {response.content}")
+
     except Exception as e:
         print(f"Error uploading post on Instagram: {e}")
 
@@ -341,7 +363,7 @@ def main():
     output = get_rss_data(feeds)
 
     # drop_table()
-    # create_table()
+    create_table()
 
     for out in output:
         title = out["title"]
@@ -352,13 +374,14 @@ def main():
             if gpt_answer:
                 caption = gpt_answer.get("caption")
                 script = gpt_answer.get("script")
+                tweet = gpt_answer.get("tweet")
 
                 if caption:
                     image_url = generate_image(caption)
 
                     if image_url:
-                        upload_post(image_url, caption)
-                        save_post(feeds[0], title, caption, script, image_url)
+                        upload_post(image_url, caption, tweet)
+                        save_post(feeds[0], title, caption, script, image_url, tweet)
                         break
         else:
             print(f"Post already exists: {title}")
