@@ -13,10 +13,11 @@ import pytz
 load_dotenv()
 
 feeds = [
-    "https://www.artificialintelligence-news.com/feed/"
+    "https://www.artificialintelligence-news.com/feed/",
+    "https://news.mit.edu/rss/topic/artificial-intelligence2"
 ]
 
-THRESHOLD_HOURS=24
+THRESHOLD_HOURS=(24*7)
 
 DATABASE = {
     "dbname": os.environ.get("DB_NAME"),
@@ -214,7 +215,7 @@ def generate_gpt(title, content):
         )
         prompt = f"""
         Summarize the below news article into a catchy Instagram caption
-        within 2000 characters, also create a script (which only contains text) that would take a TTS model about 60-90s to read.
+        within 2000 characters and atleast 500 characters, also create a script (which only contains text) that would take a TTS model about 60-90s to read.
 
         Based on the following content:\n\n{content}
 
@@ -314,26 +315,33 @@ def upload_post(image_url, caption):
     """
         
     try:
-        image_path = download_image_as_jpg(image_url)
+        cookie = os.environ.get('INSTAGRAM_COOKIE')
+        url = os.environ.get('INSTAGRAM_POST_URL')
 
-        USERNAME = os.getenv("INSTAGRAM_USERNAME")
-        PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
-        cl = Client()
-        cl.login(USERNAME, PASSWORD)
-        media = cl.photo_upload(path=image_path, caption=caption)
-        print(f"Post successfully added: {media}")
-        os.remove(image_path)
+        headers = {
+            "Cookie": cookie,
+        }
+
+        data = {
+            "caption": caption,
+            "image_url": image_url
+        }
+
+        response = requests.post(url, headers=headers, data=data)
+
+        if response.status_code == 200:
+            print("Posted succesfully to Instagram")
+        else:
+            print(f"Error uploading to instagram, response: {response.content}")
     except Exception as e:
         print(f"Error uploading post on Instagram: {e}")
-        if os.path.exists(image_path):
-            os.remove(image_path)
 
 
 def main():
     output = get_rss_data(feeds)
 
     # drop_table()
-    create_table()
+    # create_table()
 
     for out in output:
         title = out["title"]
@@ -349,8 +357,9 @@ def main():
                     image_url = generate_image(caption)
 
                     if image_url:
-                        # upload_post(image_url, caption)
+                        upload_post(image_url, caption)
                         save_post(feeds[0], title, caption, script, image_url)
+                        break
         else:
             print(f"Post already exists: {title}")
 
